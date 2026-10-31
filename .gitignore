@@ -1,0 +1,51 @@
+# Local snapshots, recordings, and unfinished video experiments
+/snapshots/
+/video/
+*.mp4
+*.mov
+*.wav
+
+# Dependencies, generated bundles, caches, and test output
+**/node_modules/
+**/dist/
+**/build/
+**/coverage/
+**/.gradle/
+**/.cxx/
+**/.kotlin/
+**/.bundle/
+**/.impeccable/
+*.tsbuildinfo
+*.log
+.metro-health-check*
+
+# Local machine and editor configuration
+.DS_Store
+.idea/
+.vscode/
+*.iml
+**/local.properties
+**/.xcode.env.local
+**/xcuserdata/
+**/DerivedData/
+**/Pods/
+
+# Credentials and private signing keys
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+
+# Android-only prototype: untouched iOS template and local experiment notes
+/android-app/ios/
+/android-app/Gemfile
+/android-app/TEST_LATER.md
+/poc/work/
+/poc/PRODUCT.md
+/poc/DESIGN.md
+/poc/POC_SPEC.md
