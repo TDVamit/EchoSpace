@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+
+logs/
+
+.models/
+test-ae5ae-firebase-adminsdk-fbsvc-98211eaa77.json

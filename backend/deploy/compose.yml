@@ -1,0 +1,39 @@
+services:
+  livekit:
+    image: livekit/livekit-server:v1.9.12
+    restart: unless-stopped
+    network_mode: host
+    command: --config /config/livekit.yml
+    volumes:
+      - ./livekit.yml:/config/livekit.yml:ro
+  gateway:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    command: uvicorn voice_gateway:app --host 0.0.0.0 --port 8000
+  agent:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    restart: unless-stopped
+    network_mode: host
+    env_file: .env
+    command: python realtime_agent.py start
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    env_file: .env
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    ports:
+      - '80:80'
+      - '443:443'
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+volumes:
+  caddy_data:
+  caddy_config:

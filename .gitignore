@@ -1,6 +1,8 @@
 # Local snapshots, recordings, and unfinished video experiments
 /snapshots/
 /video/
+/.presentation-build/
+/presentation-output/EchoSpace-with-demo-access.pptx
 *.mp4
 *.mov
 *.wav
@@ -31,6 +33,15 @@
 **/Pods/
 
 # Credentials and private signing keys
+/backend/*.json
+/backend/.venv/
+/backend/__pycache__/
+/backend/.pytest_cache/
+/backend/logs/
+/backend/audio/
+**/google-services.json
+**/*firebase-adminsdk*.json
+**/*service-account*.json
 .env
 .env.*
 !.env.example
@@ -40,6 +51,7 @@
 *.pfx
 *.jks
 *.keystore
+/android-app/android/app/src/main/assets/vosk-model-small-en-us-0.15.zip
 
 # Android-only prototype: untouched iOS template and local experiment notes
 /android-app/ios/

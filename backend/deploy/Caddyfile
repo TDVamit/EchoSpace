@@ -1,0 +1,8 @@
+{$PUBLIC_HOST} {
+  handle /v1/* {
+    reverse_proxy gateway:8000
+  }
+  handle {
+    reverse_proxy host.docker.internal:7880
+  }
+}

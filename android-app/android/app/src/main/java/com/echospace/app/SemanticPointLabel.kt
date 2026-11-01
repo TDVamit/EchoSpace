@@ -29,7 +29,7 @@ internal class SemanticPointLabel {
 
 /** Default per-class tones; -1 means retain the unidentified point's noise. */
 internal object SemanticTone {
-  private val frequencies = floatArrayOf(330f, 440f, 554f, 294f, 220f, 370f, 494f, 660f, 262f, 392f, 587f, 311f, 523f, 698f, 247f, 349f, 784f, 415f, 880f)
+  private val frequencies = floatArrayOf(330f, 440f, 554f, 294f, 220f, 370f, 494f, 660f, 262f, 392f, 587f, 311f, 523f, 698f, 247f, 349f, 784f, 415f, 880f, 932f, 1047f, 196f, 740f, 466f)
   fun frequencyHz(category: Int): Float = frequencies.getOrElse(category) { 0f }
   fun pulseHz(category: Int): Float = if (category in frequencies.indices) 0.65f + (category % 4) * 0.25f else 0f
 }

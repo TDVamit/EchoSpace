@@ -16,6 +16,8 @@ import android.widget.LinearLayout
 import android.graphics.drawable.GradientDrawable
 import android.widget.TextView
 import android.widget.Toast
+import com.facebook.react.ReactApplication
+import com.facebook.react.modules.core.DeviceEventManagerModule
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
@@ -39,10 +41,12 @@ import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
 
 class DepthScanActivity : Activity(), GLSurfaceView.Renderer {
+  private var ownsReactHostLifecycle = false
   private var session: Session? = null
   private lateinit var glView: GLSurfaceView
   private lateinit var status: TextView
   private lateinit var audioToggle: TextView
+  private lateinit var deepToggle: TextView
   private lateinit var detectionOverlay: DetectionOverlay
   private lateinit var objectDetector: LiveObjectDetector
   @Volatile private var detectionEnabled = true
@@ -64,7 +68,7 @@ class DepthScanActivity : Activity(), GLSurfaceView.Renderer {
   private var activityResumed = false
   private var density = 55
   private var blindMode = false
-  private var previewRange = 1f
+  @Volatile private var previewRange = 1f
   private var heightBelow = 1.5f
   private var heightAbove = 0.6f
   private var reduceFloor = false
@@ -72,7 +76,7 @@ class DepthScanActivity : Activity(), GLSurfaceView.Renderer {
   private var lastHeading = floatArrayOf(0f, 0f, -1f)
   private var audioEnabled = true
   private var audioVoices = 128
-  private var audioVolume = 0.35f
+  @Volatile private var audioVolume = 0.35f
   @Volatile private var audioStarted = false
   private var nextAudioRetryMillis = 0L
   private var lastAudioUpdateNanos = 0L
@@ -163,6 +167,7 @@ class DepthScanActivity : Activity(), GLSurfaceView.Renderer {
     root.addView(detectionOverlay, FrameLayout.LayoutParams(-1, -1))
     objectDetector = LiveObjectDetector(this) { result ->
       android.util.Log.i("EchoSpaceDetector", "inference_ms=${result.inferenceMs} total_ms=${result.totalMs} count=${result.detections.size} error=${result.error}")
+      if (detectionEnabled && result.error == null) VoiceScene.updateDetections(result)
       if (detectionEnabled && result.semantic != null) {
         glView.queueEvent {
           if (detectionEnabled && mapAnchor?.trackingState == TrackingState.TRACKING &&
@@ -238,6 +243,17 @@ class DepthScanActivity : Activity(), GLSurfaceView.Renderer {
     }
     tools.addView(detectButton, LinearLayout.LayoutParams(0, -2, 1f).apply { setMargins(dp(3), 0, dp(3), 0) })
     bottom.addView(tools, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
+    deepToggle = control("Deep", "Turn Deep voice assistant on or off") {
+      val prefs = getSharedPreferences("deep_controls", MODE_PRIVATE)
+      if (!prefs.getBoolean("available", false)) { Toast.makeText(this, "Sign in to use Deep", Toast.LENGTH_SHORT).show(); return@control }
+      val enabled = !prefs.getBoolean("enabled", false)
+      prefs.edit().putBoolean("enabled", enabled).apply()
+      updateDeepToggle()
+      val react = (application as? ReactApplication)?.reactHost?.currentReactContext
+      if (react?.hasActiveReactInstance() == true) react.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java).emit("EchoDeepEnabled", enabled)
+    }
+    bottom.addView(deepToggle, LinearLayout.LayoutParams(-1, -2).apply { setMargins(dp(3), dp(8), dp(3), 0) })
+    updateDeepToggle()
     top.addView(bottom, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM).apply { setMargins(dp(16), 0, dp(16), dp(18)) })
     updateAudioToggle()
     root.addView(top)
@@ -271,6 +287,15 @@ class DepthScanActivity : Activity(), GLSurfaceView.Renderer {
 
   private fun updateAudioToggle() {
     if (::audioToggle.isInitialized) audioToggle.text = if (audioEnabled) "Sound on" else "Sound off"
+  }
+
+  private fun updateDeepToggle() {
+    if (::deepToggle.isInitialized) {
+      val enabled = getSharedPreferences("deep_controls", MODE_PRIVATE).getBoolean("enabled", false)
+      val available = getSharedPreferences("deep_controls", MODE_PRIVATE).getBoolean("available", false)
+      deepToggle.text = if (!available) "Deep · Sign in to enable" else if (enabled) "Stop Deep" else "Enable Deep"
+      deepToggle.contentDescription = if (!available) "Sign in to use Deep" else if (enabled) "Stop Deep voice assistant" else "Enable Deep voice assistant"
+    }
   }
 
   private fun initializeSession() {
@@ -312,6 +337,14 @@ class DepthScanActivity : Activity(), GLSurfaceView.Renderer {
 
   override fun onResume() {
     super.onResume()
+    // The scanner is a native Activity. Keep the existing React host resumed while
+    // it is visible so wake events, LiveKit callbacks and JS timers keep working.
+    val host = (application as? ReactApplication)?.reactHost
+    if (host?.currentReactContext != null) {
+      host.onHostResume(this)
+      ownsReactHostLifecycle = true
+    }
+    activeVoiceScan = this
     activityResumed = true
     lastAudioSelectionNanos = 0L
     lastAudioUpdateNanos = 0L
@@ -335,6 +368,13 @@ class DepthScanActivity : Activity(), GLSurfaceView.Renderer {
   }
 
   override fun onPause() {
+    if (ownsReactHostLifecycle) {
+      val host = (application as? ReactApplication)?.reactHost
+      if (host?.currentReactContext?.currentActivity === this) host.onHostPause(this)
+      ownsReactHostLifecycle = false
+    }
+    if (activeVoiceScan === this) activeVoiceScan = null
+    VoiceScene.clear()
     activityResumed = false
     handler.removeCallbacks(statusUpdater)
     AudioEngine.setSources(FloatArray(0))
@@ -350,7 +390,7 @@ class DepthScanActivity : Activity(), GLSurfaceView.Renderer {
     super.onPause()
   }
 
-  override fun onDestroy() { if (::objectDetector.isInitialized) objectDetector.close(); mapAnchor?.detach(); mapAnchor = null; session?.close(); session = null; super.onDestroy() }
+  override fun onDestroy() { VoiceScene.clear(); if (::objectDetector.isInitialized) objectDetector.close(); mapAnchor?.detach(); mapAnchor = null; session?.close(); session = null; super.onDestroy() }
 
   override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
     textureSession = null
@@ -400,6 +440,7 @@ class DepthScanActivity : Activity(), GLSurfaceView.Renderer {
         }
         active.setDisplayGeometry(windowManager.defaultDisplay.rotation, glView.width, glView.height)
         val frame = active.update()
+        VoiceCamera.capture(frame)
         if (!blindMode && viewMode == 0) drawCameraBackground(frame)
         val camera = frame.camera
         trackingLabel = when (camera.trackingState) {
@@ -605,6 +646,7 @@ class DepthScanActivity : Activity(), GLSurfaceView.Renderer {
       if (written == selectedAudioOffsets.size) selectedCategories else selectedCategories.copyOf(written),
       if (written == selectedAudioOffsets.size) selectedIds else selectedIds.copyOf(written),
     )
+    VoiceScene.update(selected, selectedCategories, written)
     soundingPointCount = written
     soundingTaggedCount = selectedCategories.take(written).count { it in 0..17 }
     if (BuildConfig.DEBUG && timestampNanos - lastAudioDiagnosticsNanos >= 2_000_000_000L) {
@@ -948,6 +990,34 @@ class DepthScanActivity : Activity(), GLSurfaceView.Renderer {
   }
 
   companion object {
+    @Volatile private var activeVoiceScan: DepthScanActivity? = null
+
+    fun isVoiceScanActive(): Boolean = activeVoiceScan != null
+
+    fun updateDeepControl() {
+      val scan = activeVoiceScan ?: return
+      scan.runOnUiThread { scan.updateDeepToggle() }
+    }
+
+    /** Called on the main thread; normal Activity shutdown handles recording and AR cleanup. */
+    fun stopVoiceScan(): Boolean {
+      val scan = activeVoiceScan ?: return false
+      if (scan.isFinishing || scan.isDestroyed) return false
+      scan.finish()
+      return true
+    }
+
+    fun setVoiceSetting(name: String, value: Double): Boolean {
+      val scan = activeVoiceScan ?: return false
+      when (name) {
+        "hearing_distance" -> if (value in 1.0..20.0) scan.previewRange = value.toFloat() else return false
+        "sound_level" -> if (value in 0.0..100.0) scan.audioVolume = value.toFloat() / 100f else return false
+        else -> return false
+      }
+      AudioEngine.setConfig(scan.audioVolume, scan.previewRange, scan.audioVoices)
+      return true
+    }
+
     private const val CAMERA_REQUEST = 41
     private const val MAX_POINTS = 90_000
     private const val INITIAL_VOXEL_SIZE_METERS = 0.10f

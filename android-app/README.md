@@ -8,6 +8,9 @@ React Native provides the home screen and settings. The live scanner is a native
 - JDK 17 and Android SDK/NDK versions requested by the Gradle project. Set `ANDROID_HOME` or create a local `android/local.properties`.
 - An Android device with Google Play Services for AR and ARCore Depth support. A Galaxy S23 Ultra has been used for early tests.
 - Stereo headphones for spatial audio testing.
+- A Firebase Android app registered for `com.echospace.app`. Download its `google-services.json` into `android/app/`; this local configuration file is intentionally ignored by Git.
+
+Voice integration is experimental. A Firebase-authenticated LiveKit/Vertex service must be configured separately. After sign-in, Vosk listens on the phone for “Hey Deep” or “Hello Deep”; no audio is sent to the voice service before the wake phrase. Pause after the phrase until Deep responds, then speak. The conversation disconnects after roughly 30 seconds of silence and returns to local wake listening. Guest mode disables Deep. The wake phrase and its interaction with camera scanning and audio require physical-device testing.
 
 ## Build a standalone debug APK
 
@@ -15,6 +18,7 @@ From this directory:
 
 ```sh
 npm ci
+sh scripts/prepare-wake-model.sh
 cd android
 ./gradlew :app:assembleDebug -PstandaloneDebug -PreactNativeArchitectures=arm64-v8a
 ```

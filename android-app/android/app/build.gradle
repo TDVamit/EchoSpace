@@ -1,6 +1,16 @@
 apply plugin: "com.android.application"
 apply plugin: "org.jetbrains.kotlin.android"
 apply plugin: "com.facebook.react"
+apply plugin: "com.google.gms.google-services"
+
+tasks.register("verifyWakeModel") {
+    doLast {
+        if (!file("src/main/assets/vosk-model-small-en-us-0.15.zip").isFile()) {
+            throw new GradleException("Offline wake model missing. Run: sh scripts/prepare-wake-model.sh from android-app/.")
+        }
+    }
+}
+tasks.named("preBuild").configure { dependsOn("verifyWakeModel") }
 
 // LiteRT's Kotlin metadata is newer than this project's Kotlin compiler;
 // this integration uses its Java Interpreter API only.
@@ -110,6 +120,10 @@ android {
 }
 
 dependencies {
+    testImplementation("junit:junit:4.13.2")
+    implementation("com.google.firebase:firebase-auth:25.0.0")
+    implementation("net.java.dev.jna:jna:5.18.1@aar")
+    implementation("com.alphacephei:vosk-android:0.3.75@aar")
     // The version of react-native is set by the React Native Gradle Plugin
     implementation("com.facebook.react:react-android")
     implementation("com.google.ar:core:1.54.0")

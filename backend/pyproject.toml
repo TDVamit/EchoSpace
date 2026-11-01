@@ -1,0 +1,22 @@
+[project]
+name = "voice-agent"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "firebase-admin>=6.7",
+    "google-genai>=2.25.0",
+    "livekit-agents>=1.0",
+    "livekit-api>=1.2",
+    "livekit-plugins-google>=1.8.5",
+    "livekit-plugins-openai>=1.8.5",
+    "livekit-plugins-silero>=1.0",
+    "openai>=1.75.0",
+    "python-dotenv>=1.0.1",
+    "sounddevice>=0.5.0",
+    "soundfile>=0.13.0",
+    "uvicorn>=0.34",
+    "vosk==0.3.42",
+]

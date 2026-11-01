@@ -4,6 +4,9 @@ import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
 import android.os.Process
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.sqrt
 import kotlin.math.sin
 
@@ -39,8 +42,15 @@ object AudioEngine {
   private val noiseMix = FloatArray(MAX_VOICES) { 1f }
   private val sharedPhases = FloatArray(19)
   private val sharedPulsePhases = FloatArray(19)
-  private val toneSteps = FloatArray(19) { SemanticTone.frequencyHz(it) * 2048f / SAMPLE_RATE }
-  private val pulseSteps = FloatArray(19) { SemanticTone.pulseHz(it) / SAMPLE_RATE }
+  private val toneSteps = FloatArray(24) { SemanticTone.frequencyHz(it) * 2048f / SAMPLE_RATE }
+  private val pulseSteps = FloatArray(24) { SemanticTone.pulseHz(it) / SAMPLE_RATE }
+  @Volatile private var cueProfiles = IntArray(19) { it }
+  fun cueProfile(category: Int): Int = cueProfiles.getOrElse(category) { category }
+  fun usedCueProfiles(): Set<Int> = cueProfiles.toSet()
+  @Synchronized fun setCueProfile(category: Int, profile: Int) {
+    if (category !in 0..18 || profile !in 0..23) return
+    cueProfiles = cueProfiles.copyOf().also { it[category] = profile }
+  }
   private val activeSlots = IntArray(MAX_VOICES)
   @Volatile var underrunCount: Int = 0
     private set
@@ -60,6 +70,24 @@ object AudioEngine {
   private val slotIds = LongArray(MAX_VOICES) { Long.MIN_VALUE }
   private val slotUsed = BooleanArray(MAX_VOICES)
   private val sineTable = FloatArray(2048) { sin(2.0 * Math.PI * it / 2048).toFloat() }
+  private class PreviewRequest(val profile: Int) {
+    val done = CountDownLatch(1)
+    @Volatile var completed = false
+  }
+  private val previewRequest = AtomicReference<PreviewRequest?>(null)
+
+  /** Plays a finite cue in the scanner's output and waits until its samples were written. */
+  fun playPreview(profile: Int): String? {
+    if (profile !in toneSteps.indices) return "Sound preview is not available."
+    if (!isRunning() || !enabled || volume <= 0f) return "Turn on scan sound and increase its volume before previewing."
+    val request = PreviewRequest(profile)
+    if (!previewRequest.compareAndSet(null, request)) return "A sound preview is already playing."
+    val finished = try { request.done.await(5, TimeUnit.SECONDS) } catch (_: InterruptedException) {
+      Thread.currentThread().interrupt(); false
+    }
+    if (!finished) previewRequest.compareAndSet(request, null)
+    return if (finished && request.completed) null else "The scanner's audio output could not play the preview."
+  }
 
   @Synchronized
   fun start(): Boolean {
@@ -103,6 +131,7 @@ object AudioEngine {
           android.util.Log.e("EchoSpaceAudio", "Audio worker stopped unexpectedly", e)
         } finally {
           if (track === created) {
+            previewRequest.getAndSet(null)?.done?.countDown()
             track = null
             running = false
             try { created.release() } catch (_: RuntimeException) {}
@@ -122,6 +151,7 @@ object AudioEngine {
   @Synchronized
   fun stop() {
     running = false
+    previewRequest.getAndSet(null)?.done?.countDown()
     val current = track
     track = null
     try { current?.pause() } catch (_: RuntimeException) {}
@@ -153,6 +183,12 @@ object AudioEngine {
     var previousRange = -1f
     var previousLimit = -1
     var nextUnderrunCheck = 0L
+    var currentPreview: PreviewRequest? = null
+    var previewFrame = 0
+    var previewPhase = 0f
+    var previewPulsePhase = 0f
+    val previewTotalFrames = SAMPLE_RATE * 2
+    val previewFadeFrames = SAMPLE_RATE / 20
     while (running) {
       val currentTrack = track ?: break
       val sourceFrame = sources
@@ -272,6 +308,15 @@ object AudioEngine {
         noiseLeftTarget[group] *= scale
         noiseRightTarget[group] *= scale
       }
+      val profilesForBlock = cueProfiles
+      val requestedPreview = previewRequest.get()
+      if (requestedPreview !== currentPreview) {
+        currentPreview = requestedPreview
+        previewFrame = 0
+        previewPhase = 0f
+        previewPulsePhase = 0f
+      }
+      var previewFinished = false
       for (frame in 0 until FRAMES_PER_BLOCK) {
         var left = 0f
         var right = 0f
@@ -292,19 +337,42 @@ object AudioEngine {
           right += softNoise * 2.5f * noiseRightCurrent[group]
         }
         for (category in 0..18) {
+          val profile = profilesForBlock[category]
           cueLeftCurrent[category] += (cueLeftTarget[category] - cueLeftCurrent[category]) * 0.0005f
           cueRightCurrent[category] += (cueRightTarget[category] - cueRightCurrent[category]) * 0.0005f
           val phaseIndex = sharedPhases[category].toInt() and 2047
-          val texture = AudioCueMath.texture(category, sineTable[phaseIndex], sineTable[(phaseIndex * 2) and 2047])
+          val texture = AudioCueMath.texture(profile, sineTable[phaseIndex], sineTable[(phaseIndex * 2) and 2047])
           val pulseIndex = (sharedPulsePhases[category] * 2048).toInt() and 2047
-          val pulse = AudioCueMath.envelope(category, sineTable[pulseIndex], sineTable[(pulseIndex * 2) and 2047])
+          val pulse = AudioCueMath.envelope(profile, sineTable[pulseIndex], sineTable[(pulseIndex * 2) and 2047])
           val sound = texture * pulse
           left += sound * cueLeftCurrent[category]
           right += sound * cueRightCurrent[category]
-          val next = sharedPhases[category] + toneSteps[category]
+          val next = sharedPhases[category] + toneSteps[profile]
           sharedPhases[category] = if (next >= 2048f) next - 2048f else next
-          val nextPulse = sharedPulsePhases[category] + pulseSteps[category]
+          val nextPulse = sharedPulsePhases[category] + pulseSteps[profile]
           sharedPulsePhases[category] = if (nextPulse >= 1f) nextPulse - 1f else nextPulse
+        }
+        val preview = currentPreview
+        if (preview != null && previewFrame < previewTotalFrames) {
+          val profile = preview.profile
+          val toneIndex = previewPhase.toInt() and 2047
+          val pulseIndex = (previewPulsePhase * 2048).toInt() and 2047
+          val texture = AudioCueMath.texture(profile, sineTable[toneIndex], sineTable[(toneIndex * 2) and 2047])
+          val rhythm = AudioCueMath.envelope(profile, sineTable[pulseIndex], sineTable[(pulseIndex * 2) and 2047])
+          val fade = AudioPreviewMath.fade(previewFrame, previewTotalFrames, previewFadeFrames)
+          val backgroundGain = 1f - fade * 0.6f
+          left *= backgroundGain
+          right *= backgroundGain
+          val level = minOf(0.3f, masterVolume * 0.45f)
+          val cue = texture * rhythm * fade * level
+          left += cue
+          right += cue
+          previewPhase += toneSteps[profile]
+          if (previewPhase >= 2048f) previewPhase -= 2048f
+          previewPulsePhase += pulseSteps[profile]
+          if (previewPulsePhase >= 1f) previewPulsePhase -= 1f
+          previewFrame++
+          if (previewFrame == previewTotalFrames) previewFinished = true
         }
         val peak = maxOf(kotlin.math.abs(left), kotlin.math.abs(right))
         val limiter = AudioMixMath.limiter(peak)
@@ -323,6 +391,11 @@ object AudioEngine {
         if (offset < output.size && running) {
           android.util.Log.e("EchoSpaceAudio", "AudioTrack write stopped after $offset of ${output.size} samples")
           break
+        }
+        val preview = currentPreview
+        if (previewFinished && preview != null && offset == output.size && previewRequest.compareAndSet(preview, null)) {
+          preview.completed = true
+          preview.done.countDown()
         }
         val now = android.os.SystemClock.elapsedRealtime()
         if (now >= nextUnderrunCheck) {
